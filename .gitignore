@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+web/node_modules/
+
+# Swift build
+Recall/.build/
+Recall/build/
+Recall/Resources/Recall.iconset/
+*.xcodeproj
+
+# Supermemory local engine data (encrypted store, model cache)
+.supermemory/
+
+# Captured data (screenshots, OCR sidecars, edge cache) — local & private
+data/
+
+# macOS
+.DS_Store
+
+# logs / temp
+*.log
+scratchpad/

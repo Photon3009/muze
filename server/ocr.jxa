@@ -1,0 +1,30 @@
+// Apple Vision OCR via JXA — no dependencies, fully on-device.
+// Usage: osascript -l JavaScript ocr.jxa <path-to-image>
+ObjC.import('Foundation')
+ObjC.import('Vision')
+ObjC.import('AppKit')
+
+function run(argv) {
+  const path = argv[0]
+  const img = $.NSImage.alloc.initWithContentsOfFile(path)
+  if (img.isNil()) return ''
+  const tiff = img.TIFFRepresentation
+  const rep = $.NSBitmapImageRep.imageRepWithData(tiff)
+  const cgImage = rep.CGImage
+
+  const request = $.VNRecognizeTextRequest.alloc.init
+  request.recognitionLevel = $.VNRequestTextRecognitionLevelAccurate
+  request.usesLanguageCorrection = true
+
+  const handler = $.VNImageRequestHandler.alloc.initWithCGImageOptions(cgImage, $.NSDictionary.dictionary)
+  const error = Ref()
+  handler.performRequestsError($.NSArray.arrayWithObject(request), error)
+
+  const results = request.results
+  const lines = []
+  for (let i = 0; i < results.count; i++) {
+    const candidate = results.objectAtIndex(i).topCandidates(1).objectAtIndex(0)
+    lines.push(candidate.string.js)
+  }
+  return lines.join('\n')
+}

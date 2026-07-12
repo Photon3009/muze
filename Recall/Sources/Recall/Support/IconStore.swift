@@ -1,0 +1,58 @@
+import AppKit
+import SwiftUI
+
+/// Real icons for graph source nodes: web sources get their favicon
+/// (fetched once, cached to disk), local apps get their actual macOS icon.
+@MainActor
+final class IconStore: ObservableObject {
+    static let shared = IconStore()
+
+    @Published private var icons: [String: NSImage] = [:]
+    private var inflight: Set<String> = []
+
+    private var cacheDir: URL {
+        let dir = Store.dataDir.appendingPathComponent("icons", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Returns immediately with whatever is available; kicks off a fetch
+    /// in the background when it isn't (view re-renders via @Published).
+    func icon(label: String, domain: String?, bundleID: String?) -> NSImage? {
+        if let img = icons[label] { return img }
+
+        // Web source → the site's own favicon (preferred over any app icon,
+        // so a tweet shows the X mark, not the browser it was saved from).
+        if let domain, !domain.isEmpty {
+            let file = cacheDir.appendingPathComponent("\(domain).png")
+            if let img = NSImage(contentsOf: file) {
+                icons[label] = img
+                return img
+            }
+            if !inflight.contains(label) {
+                inflight.insert(label)
+                Task {
+                    defer { inflight.remove(label) }
+                    guard let url = URL(string: "https://www.google.com/s2/favicons?sz=64&domain=\(domain)") else { return }
+                    var req = URLRequest(url: url)
+                    req.timeoutInterval = 6
+                    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                          (resp as? HTTPURLResponse)?.statusCode == 200,
+                          let img = NSImage(data: data) else { return }
+                    try? data.write(to: file)
+                    icons[label] = img
+                }
+            }
+            return nil
+        }
+
+        // Local app (no web source) → real app icon.
+        if let bid = bundleID, !bid.isEmpty,
+           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
+            let img = NSWorkspace.shared.icon(forFile: appURL.path)
+            icons[label] = img
+            return img
+        }
+        return nil
+    }
+}
