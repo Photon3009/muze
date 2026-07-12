@@ -27,7 +27,7 @@ export function getDocument(id) {
   return api(`/v3/documents/${id}`, { method: 'GET' })
 }
 
-// One sky, two constellations: deliberate captures + Recall's passive
+// One sky, two constellations: deliberate captures + Muze's passive
 // screen memories live in separate containers but are shown together.
 export const ALL_TAGS = [CONTAINER_TAG, 'recall']
 

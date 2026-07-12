@@ -138,7 +138,8 @@ app.post('/api/ask', async (req, res) => {
 
 // ---- static ------------------------------------------------------------
 app.use('/captures', express.static(CAPTURES_DIR))
-// Recall (the passive screen-memory app) keeps its thumbnails here.
+// Muze (the passive screen-memory app) keeps its thumbnails here
+// (the data dir is still named Recall from the original app name).
 app.use(
   '/recall-thumbs',
   express.static(path.join(process.env.HOME || '', 'Library/Application Support/Recall/thumbs')),

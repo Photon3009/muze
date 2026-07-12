@@ -3,9 +3,9 @@ node_modules/
 web/node_modules/
 
 # Swift build
-Recall/.build/
-Recall/build/
-Recall/Resources/Recall.iconset/
+Muze/.build/
+Muze/build/
+Muze/Resources/Muze.iconset/
 *.xcodeproj
 
 # Supermemory local engine data (encrypted store, model cache)
