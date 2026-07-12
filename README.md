@@ -1,103 +1,164 @@
-# ✦ Constellation
+<div align="center">
 
-**Press one key — your laptop remembers this moment.**
+# 🪶 Muze
 
-A screenshot is the universal API to every app you use: VS Code, Figma, Spotify,
-a PDF, a tweet. Constellation captures your laptop's current state (screenshot +
-which app + window title + browser URL) into [Supermemory Local](https://supermemory.ai/docs/self-hosting/overview),
-then gives the engine the interface it never had:
+### *Your mind, remembered.*
 
-- **✦ Constellation** — every memory is a star; semantically related memories
-  link into constellations you can fly through.
-- **◉ Oracle** — ask anything; answers are synthesized by a local LLM from your
-  top matching memories, with citations.
-- **☄ Compass** — where your attention is going: capture rhythm, apps, drift.
+**A local-first macOS app that quietly remembers everything you see — then lets you chat with it, map it, and explore it.**
 
-Everything runs on `localhost`. Nothing ever leaves your machine — the whole
-stack works with WiFi off.
+Muze passively watches your screen, reads the text on it with on-device OCR, and turns your day
+into a searchable memory. Then it gives you three ways in: **Chat**, **Graph**, and **Canvas**.
+All of it runs on `localhost` — **nothing ever leaves your machine.**
 
-## Architecture
+`Rewind × Supermemory × a little mythology` — built on `localhost:6767`.
+
+</div>
+
+---
+
+## 🧠 The three ways into your memory
+
+| | | |
+|---|---|---|
+| 💬 **Chat** | Ask your memory anything in plain language — *"what was that error I saw an hour ago?"* — and get a **synthesized answer with citations**, not a wall of screenshots. Summon it anywhere with **⌥Space**. |
+| 🕸 **Graph** | Every memory is a node; semantically related ones link into constellations you can explore. |
+| 🎨 **Canvas** | A freeform board — pull memories out and arrange them spatially to think and connect ideas. |
+
+Plus, on the side:
+
+- **⌥S** — deliberately save whatever's on screen right now as a keeper memory.
+- **Screen time** — top apps *and* the top **sites inside your browser** (e.g. `youtube.com`, not just "Chrome").
+- **MUZE NOTICED** — small insight cards about your day; **STILL RECALL THIS** resurfaces things you'd forgotten.
+- **TODAY YOU ARE** — casts your day's consumption into one of **16 mythological archetypes**.
+
+> 📖 Full app docs, build instructions, and deeper diagrams live in **[`Muze/README.md`](Muze/README.md)**.
+
+---
+
+## 🗜 The storage trick — a year of memory in single-digit GB
+
+Screens are huge; text is tiny. **Muze never persists pixels.**
 
 ```
-hotkey / native ⌘⇧3 screenshots
-        │
-        ▼
-Node server (:7777) ── screencapture + AppleScript context
-        │                       │
-        ├── Apple Vision OCR (on-device, server/ocr.jxa)
-        ├── Ollama (:11434) narrates the screen as a first-person memory
-        │                       │
-        ▼                       ▼
-Supermemory Local (:6767)   data/captures/ (PNGs + OCR sidecars for the UI)
-  fact extraction · embeddings · knowledge graph
+every 5s:  📸 capture ─▶ 🔁 dHash dedupe ─▶ 👁 Vision OCR ─▶ 🗑 discard the frame
+                                                          └─▶ 💾 keep ~2–5 KB of text
 ```
 
-Token economy by design: OCR, context, embeddings, graph linking, and all stats
-are done on-device by Apple Vision, the local engine, or plain code. The only
-LLM calls are local Ollama: one narration per capture, and answer synthesis
-over the top-6 retrieved memories per question. Zero cloud tokens, ever.
+- **~90% of frames are dropped** by a 64-bit perceptual hash before OCR — static screens and idle
+  time cost nothing.
+- Consecutive frames from the same window with **>0.95 text similarity** merge into one memory
+  (scrolling a document ≠ 40 memories).
 
-## Run it
+**A full day is a few MB. A year fits in single-digit GB.**
+
+---
+
+## 🏗 How it's wired
+
+```mermaid
+flowchart TD
+    subgraph mac["🖥  Your Mac — everything below is local"]
+        direction TB
+        SCK["ScreenCaptureKit<br/>active display, every 5s"]
+        CTX["Context<br/>frontmost app · window title · browser tab URL"]
+        OCR["Apple Vision OCR<br/>on-device text recognition"]
+        SQL[("SQLite<br/>frames + crash-safe queue")]
+        OLL["Ollama · qwen3:8b<br/>enrich · tag · chat"]
+        SM[("Supermemory Local<br/>:6767 — vector memory")]
+    end
+
+    SCK --> CTX --> PRIV{"Privacy filter<br/>blocked app/domain?"}
+    PRIV -- blocked --> DROP1["🗑 discarded pre-OCR"]
+    PRIV -- allowed --> OCR --> SQL
+    SQL --> OLL --> SM
+    SM --> UI["💬 Chat · 🕸 Graph · 🎨 Canvas · ⌥Space"]
+    OLL --> UI
+
+    classDef store fill:#1a1a18,stroke:#f96f1d,color:#eceae3;
+    classDef drop fill:#2a1410,stroke:#7a3b2a,color:#e0b8a8;
+    class SQL,SM store;
+    class DROP1 drop;
+```
+
+Everything with a port lives on `localhost`. The only network calls are to `:6767` (Supermemory)
+and `:11434` (Ollama) — both on your machine. Prefer a cloud model? Point the provider at OpenAI,
+Anthropic, or any OpenAI-compatible endpoint in **Settings → Services**.
+
+---
+
+## ⚙️ The capture pipeline
+
+```mermaid
+flowchart LR
+    A["⏱ tick (5s)"] --> B{idle / locked /<br/>low battery?}
+    B -- yes --> Z["skip · close session"]
+    B -- no --> C["read context"]
+    C --> D{privacy<br/>blocklist?}
+    D -- blocked --> Z2["🗑 drop pre-capture"]
+    D -- ok --> E["📸 capture"]
+    E --> F{dHash<br/>duplicate?}
+    F -- yes --> G["count only · drop"]
+    F -- no --> H["👁 OCR"]
+    H --> J{same window &<br/>>0.95 similar?}
+    J -- yes --> K["merge into<br/>last memory"]
+    J -- no --> L["💾 store frame<br/>+ track session"]
+    L --> M["enrich → Supermemory"]
+```
+
+Muze groups frames into **app-sessions** and builds *one* rich memory per session — a first-person
+summary + facts + tags, produced by the local LLM. Full OCR stays in local SQLite; enrichment runs
+on a **crash-safe background queue** that never blocks capture.
+
+---
+
+## 🚀 Setup & run
+
+**Prerequisites**
+
+| Dependency | Port | Purpose |
+|---|---|---|
+| [Supermemory Local](https://supermemory.ai/docs/self-hosting/overview) | `6767` | vector memory store |
+| [Ollama](https://ollama.com) + `qwen3:8b` | `11434` | on-device LLM (enrichment, tagging, chat) |
 
 ```bash
-# one-time setup
-npx supermemory local            # installs supermemory-server
-brew install ollama && ollama pull qwen3:8b
-npm install && cd web && npm install && npm run build && cd ..
+# 1. start the engines (Muze can also auto-launch them)
+supermemory-server                     # :6767
+ollama pull qwen3:8b && ollama serve   # :11434
 
-# every day
-./bin/start.sh                   # boots ollama → engine → constellation, opens the UI
+# 2. build & install the app
+cd Muze
+./Scripts/make-app.sh                  # swift build + .app assembly + codesign + install
+open /Applications/Muze.app
 ```
 
-Open **http://localhost:7777**. The capture button (or `⌘⇧M` once bound, below)
-captures the moment; any native macOS screenshot (`⌘⇧3` / `⌘⇧4`) is ingested
-automatically by the folder watcher.
+On first launch, onboarding walks you through granting **Screen Recording** + **Accessibility**
+(and optionally **Full Disk Access** for native macOS screen-time). See
+**[`Muze/README.md`](Muze/README.md)** for signing notes and troubleshooting.
 
-### System-wide hotkey (works in any app)
+---
 
-Open the **Shortcuts** app → new shortcut → add **Run Shell Script**:
+## 🔒 Privacy, by construction
 
-```
-/bin/zsh /Users/shivamverma/Development/mycreations/supermemory-masala/bin/capture.sh screen
-```
+- **Blocklisted apps & domains** (password managers, banking, checkout by default) are discarded
+  **before capture** — never OCR'd, never stored.
+- **Pause anytime** (15 min / 1 hr / ∞); auto-pause on idle, screen lock, or low battery.
+- **You own the data**: export everything to JSONL, or forget any time range (local + engine).
+- **Local by default**: with Ollama, screen text never leaves the machine.
 
-Then Shortcut settings → **Add Keyboard Shortcut** → press `⌘⇧M`.
-Modes: `screen` (default), `window`, `selection`.
+---
 
-### macOS permissions (required for real captures)
+## 🧩 Tech stack
 
-- **Screen Recording**: System Settings → Privacy & Security → Screen Recording
-  → enable your terminal (or whatever runs `bin/start.sh`). Without it,
-  screenshots contain only your wallpaper.
-- **Automation/Accessibility**: allow your terminal to control **System Events**
-  (frontmost app + window title) and your browser (URL). macOS prompts on the
-  first capture.
+**Swift · SwiftUI · AppKit** (native macOS) · **ScreenCaptureKit** + **Apple Vision OCR** ·
+**SQLite** (GRDB) · **Supermemory Local** (vectors) · **Ollama `qwen3:8b`** (or OpenAI / Anthropic /
+custom) · Ovo serif + film-grain design.
 
-## Config
+---
 
-Engine model config lives in `~/.supermemory/env` (OpenAI-compatible → Ollama):
+<div align="center">
 
-```
-OPENAI_BASE_URL=http://localhost:11434/v1
-OPENAI_API_KEY=ollama
-OPENAI_MODEL=qwen3:8b            # must be a solid native tool-caller (see below)
-OPENAI_FAST_MODEL=qwen3:8b
-SUPERMEMORY_DATA_DIR=<repo>/.supermemory
-```
+*Built for the **Localhost:6767** hackathon — a love letter to memory that never leaves your machine.*
 
-Constellation server env: `CONSTELLATION_PORT` (7777), `ORACLE_MODEL`
-(qwen3:8b), `CONSTELLATION_TAG` (container tag, default `constellation`).
+🪶
 
-## Hard-won notes
-
-- **The extraction model must be a reliable native tool-caller.** The engine's
-  memory agent creates memories via tool calls. `qwen3:8b` works. `llama3.1:8b`
-  narrates its tool calls as prose → 0 memories. `gpt-oss:20b` emits malformed
-  tool-call JSON through Ollama (`{"key:value` — missing quote) → HTTP 500 →
-  document marked failed.
-- **Screenshots are ingested as narrated text, not image uploads.** The v0.0.3
-  file bucket is broken (`invalid local file storage key`), and raw OCR dumps
-  yield 0 memories anyway — the agent wants prose. On-device narration fixes
-  both; the PNG stays local for the UI.
-- Documents that produce 0 memories are marked `failed` and excluded from
-  search — keep captures narrative and ~1 chunk long.
+</div>
