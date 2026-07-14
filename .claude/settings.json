@@ -194,7 +194,9 @@
       "Bash(osascript -e 'quit app \"Muze\"')",
       "Bash(open /Applications/Muze.app)",
       "Bash(awk '{print \"running:\", $11}')",
-      "Bash(grep -iE \"\\\\.build|node_modules|/build/|\\\\.o$|DerivedData\")"
+      "Bash(grep -iE \"\\\\.build|node_modules|/build/|\\\\.o$|DerivedData\")",
+      "Bash(git commit *)",
+      "Bash(git commit -q -m 'Rewrite root README for Muze \\(chat, graph, canvas\\) *)"
     ]
   }
 }

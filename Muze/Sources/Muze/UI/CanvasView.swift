@@ -614,7 +614,7 @@ struct MemoryPickerSheet: View {
         .onAppear {
             let snap = GraphService.SettingsSnapshot(supermemoryURL: engine.settings.supermemoryURLValue, supermemoryKey: engine.settings.supermemoryKey)
             Task {
-                let (mem, _) = await GraphService.shared.build(snap, scope: .all)
+                let mem = await GraphService.shared.nodesOnly(snap, scope: .all)
                 await MainActor.run { nodes = mem; loading = false }
             }
         }

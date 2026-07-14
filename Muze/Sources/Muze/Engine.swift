@@ -302,6 +302,7 @@ final class Engine: ObservableObject {
             self.appTimes = breakdown
             self.screenTimeSeconds = total
             self.usingSystemTime = sysUsed
+            GoalStore.shared.evaluate(appTimes: breakdown)
         }
     }
 

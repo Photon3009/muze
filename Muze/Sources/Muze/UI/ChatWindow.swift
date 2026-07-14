@@ -55,6 +55,7 @@ struct QuickAskView: View {
                     .textFieldStyle(.plain)
                     .font(Theme.ui(17))
                     .foregroundStyle(cream)
+                    .tint(Theme.accent)
                     .focused($focused)
                     .onSubmit { vm.ask(engine: engine) }
                 Menu {
@@ -168,7 +169,7 @@ final class ChatViewModel: ObservableObject {
         let sm = SupermemoryClient(baseURL: engine.settings.supermemoryURLValue, apiKey: engine.settings.supermemoryKey)
         Task {
             if resurfaceIDs.isEmpty {
-                let map = await sm.refToDocID(containerTags: [Settings.savedTag])
+                let map = await sm.refToDocID(containerTags: [Settings.savedTag, ConnectorImport.tag])
                 resurfaceIDs = Array(map.values).shuffled()
             }
             guard !resurfaceIDs.isEmpty else { return }
@@ -329,6 +330,15 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
+/// Bundled artwork used behind the "Still recall this?" card (Michelangelo's
+/// hands). Loaded once.
+enum RecallArt {
+    static let image: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "recall", withExtension: "png") else { return nil }
+        return NSImage(contentsOf: url)
+    }()
+}
+
 struct ChatView: View {
     @EnvironmentObject var engine: Engine
     @StateObject private var vm = ChatViewModel()
@@ -342,6 +352,14 @@ struct ChatView: View {
     private let card = Theme.surface
     private let amber = Theme.gold
     private let cream = Theme.ink
+
+    /// Starter prompts so a new user sees what Muze can actually do — the text
+    /// shown is exactly the question it fires.
+    private let suggestions = [
+        "Help me find something I saw today.",
+        "What should I consume next?",
+        "Summarize everything I learned today.",
+    ]
 
     private var firstName: String {
         NSFullUserName().components(separatedBy: " ").first ?? "there"
@@ -380,6 +398,7 @@ struct ChatView: View {
                     .textFieldStyle(.plain)
                     .font(Theme.ui(16))
                     .foregroundStyle(cream)
+                    .tint(Theme.accent) // caret + selection in the app's accent, not system blue
                     .focused($focused)
                     .onSubmit { vm.ask(engine: engine) }
                 if vm.busy { ProgressView().controlSize(.small) }
@@ -388,23 +407,16 @@ struct ChatView: View {
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(focused ? Theme.ink(0.28) : Theme.line))
 
-            HStack(spacing: 8) {
-                chip("plus", "Save") { SavePanelController.shared.trigger(engine: engine) }
-                chip("circle.hexagongrid", "Graph") {
-                    NotificationCenter.default.post(name: .muzeSwitchTab, object: MainTab.graph)
+            if vm.turns.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("TRY ASKING").font(Theme.ui(9, .semibold)).kerning(1.4).foregroundStyle(Theme.ink(0.35))
+                    HStack(spacing: 8) {
+                        ForEach(suggestions.indices, id: \.self) { i in
+                            suggestionPill(suggestions[i])
+                        }
+                    }
                 }
-                chip("scribble", "Canvas") {
-                    NotificationCenter.default.post(name: .muzeSwitchTab, object: MainTab.canvas)
-                }
-                Spacer()
-                Picker("", selection: $vm.scope) {
-                    Text("Saved").tag(GraphService.Scope.saved)
-                    Text("Screen").tag(GraphService.Scope.screen)
-                    Text("All").tag(GraphService.Scope.all)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 200)
+                .padding(.top, 2)
             }
 
             if let err = vm.error {
@@ -531,8 +543,8 @@ struct ChatView: View {
             Text(ins.body).font(Theme.ui(12)).foregroundStyle(Theme.ink(0.7)).lineSpacing(2).lineLimit(3)
             Spacer(minLength: 0)
         }
-        .padding(16)
-        .frame(width: 320, height: 150, alignment: .topLeading)
+        .padding(14)
+        .frame(width: 300, height: 140, alignment: .topLeading)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
         .grain(cornerRadius: 10)
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
@@ -636,18 +648,43 @@ struct ChatView: View {
         .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
     }
 
-    private func chip(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 11))
-                Text(label).font(Theme.ui(12))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            .foregroundStyle(cream.opacity(0.8))
+    /// A clickable starter prompt: fills the question and asks immediately.
+    /// The pill's text is the exact question sent.
+    private func suggestionPill(_ prompt: String) -> some View {
+        Button {
+            vm.question = prompt
+            vm.ask(engine: engine)
+        } label: {
+            Text(prompt).font(Theme.ui(12)).foregroundStyle(cream.opacity(0.75))
+                .lineLimit(1)
+                .padding(.horizontal, 11).padding(.vertical, 7)
+                .background(Theme.accent.opacity(0.07), in: Capsule())
+                .overlay(Capsule().stroke(Theme.accent.opacity(0.25)))
         }
         .buttonStyle(.plain)
+    }
+
+    /// The "Still recall this?" card background: the bundled recall artwork,
+    /// filled and clipped, under a dark scrim so the light image reads on the
+    /// dark UI and text stays legible.
+    private var recallCardBG: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(Theme.surface)
+            .overlay {
+                if let img = RecallArt.image {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(
+                LinearGradient(
+                    colors: [Theme.bg.opacity(0.62), Theme.bg.opacity(0.88)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     /// The reference card: warm angular-gradient frame, source icon,
@@ -663,66 +700,67 @@ struct ChatView: View {
                     Text("New memories will resurface here.")
                         .font(.caption).foregroundStyle(cream.opacity(0.5))
                 }
-                .padding(20)
-                .frame(width: 320, height: 260)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .padding(18)
+                .frame(width: 300, height: 208)
+                .background(recallCardBG)
                 .grain(cornerRadius: 10)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
                 .transition(.opacity)
             } else if let r = vm.resurfaced {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 9) {
                     Text("STILL RECALL THIS?")
-                        .font(Theme.ui(10, .semibold)).kerning(1.5)
+                        .font(Theme.ui(9, .semibold)).kerning(1.6)
                         .foregroundStyle(Theme.ink(0.4))
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
                             Group {
                                 if let icon = IconStore.shared.icon(label: r.sourceLabel, domain: r.domain, bundleID: r.bundleID) {
                                     Image(nsImage: icon).resizable().aspectRatio(contentMode: .fill)
                                 } else {
                                     ZStack {
                                         Color.black
-                                        Text(String(r.sourceLabel.prefix(1))).font(.headline).foregroundStyle(.white)
+                                        Text(String(r.sourceLabel.prefix(1))).font(Theme.ui(13, .semibold)).foregroundStyle(.white)
                                     }
                                 }
                             }
-                            .frame(width: 38, height: 38)
-                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                            .frame(width: 28, height: 28)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
 
                             Text(r.source)
-                                .font(Theme.ui(13, .semibold))
+                                .font(Theme.ui(12, .semibold))
                                 .foregroundStyle(Theme.ink)
+                                .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Text(r.text)
-                            .font(Theme.ui(13))
-                            .foregroundStyle(Theme.ink(0.8))
-                            .lineLimit(4)
-                        if let url = r.url, let u = URL(string: url) {
-                            Link("Revisit →", destination: u)
-                                .font(Theme.ui(12))
-                                .foregroundStyle(Theme.accent)
-                        }
+                            .font(Theme.ui(12))
+                            .foregroundStyle(Theme.ink(0.75))
+                            .lineLimit(3)
                     }
-                    .padding(14)
+                    .padding(11)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Theme.bg.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
 
                     Spacer(minLength: 0)
 
-                    HStack {
+                    HStack(spacing: 12) {
+                        if let url = r.url, let u = URL(string: url) {
+                            Link("Revisit →", destination: u)
+                                .font(Theme.ui(11, .medium))
+                                .foregroundStyle(Theme.accent)
+                        }
                         Spacer()
-                        Button("Check next →") { vm.loadResurface(engine: engine) }
+                        Button("Next →") { vm.loadResurface(engine: engine) }
                             .buttonStyle(.plain)
-                            .font(Theme.ui(12, .medium))
-                            .foregroundStyle(Theme.ink(0.7))
+                            .font(Theme.ui(11, .medium))
+                            .foregroundStyle(Theme.ink(0.55))
                     }
                 }
-                .padding(18)
-                .frame(width: 320, height: 260, alignment: .topLeading)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .padding(14)
+                .frame(width: 300, height: 208, alignment: .topLeading)
+                .background(recallCardBG)
                 .grain(cornerRadius: 10)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
                 .shadow(color: .black.opacity(0.35), radius: 16, y: 6)

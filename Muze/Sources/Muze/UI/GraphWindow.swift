@@ -132,8 +132,11 @@ final class GraphSim: ObservableObject {
     private var ticker: Timer?
     private var alpha = 1.0
     private var pinned = Set<String>() // nodes the user placed by hand
+    private var loadToken = 0
 
     func load(engine: Engine) {
+        loadToken += 1
+        let token = loadToken
         loading = true
         selected = nil
         hovered = nil
@@ -143,9 +146,33 @@ final class GraphSim: ObservableObject {
         )
         let scope = self.scope
         Task {
-            let (memories, semantic) = await GraphService.shared.build(snapshot, scope: scope)
-            await MainActor.run { self.assemble(memories: memories, semantic: semantic) }
+            // Phase 1: nodes render immediately (one list call, no per-doc search).
+            let memories = await GraphService.shared.nodesOnly(snapshot, scope: scope)
+            await MainActor.run {
+                guard token == self.loadToken else { return }
+                self.assemble(memories: memories, semantic: [])
+            }
+            // Phase 2: semantic links stream in once computed (concurrently).
+            let semantic = await GraphService.shared.semanticEdges(snapshot, scope: scope)
+            await MainActor.run {
+                guard token == self.loadToken else { return }
+                self.addSemanticEdges(semantic)
+            }
         }
+    }
+
+    /// Merge freshly-computed semantic edges into an already-laid-out graph
+    /// without resetting node positions.
+    func addSemanticEdges(_ semantic: [GraphEdge]) {
+        var set = Set(edges)
+        for e in semantic {
+            let edge = VizEdge(a: min(e.a, e.b), b: max(e.a, e.b), restLength: 130, faint: true)
+            guard set.insert(edge).inserted else { continue }
+            if let i = idToIndex[edge.a], let j = idToIndex[edge.b] { springs.append((i, j, 130)) }
+        }
+        edges = Array(set)
+        alpha = max(alpha, 0.25)
+        if ticker == nil { restartTicker() }
     }
 
     /// memories → leaf nodes; their sources → icon nodes; frequent tags → hubs.
@@ -188,16 +215,21 @@ final class GraphSim: ObservableObject {
             edgeSet.insert(VizEdge(a: min(e.a, e.b), b: max(e.a, e.b), restLength: 130, faint: true))
         }
 
-        // Deterministic seed layout.
+        // Deterministic phyllotaxis (sunflower) seed — spreads even hundreds of
+        // nodes with no initial overlap, so the force layout starts stable
+        // instead of exploding from a stack of coincident points.
+        let golden = Double.pi * (3.0 - (5.0).squareRoot())
         bodies = nodes.enumerated().map { i, n in
-            let angle = Double(i) / Double(max(nodes.count, 1)) * 2 * .pi
-            let r: Double
+            let base: Double
             switch n.kind {
-            case .hub: r = 40
-            case .source: r = 160
-            case .memory: r = 280
+            case .hub: base = 0
+            case .source: base = 60
+            case .memory: base = 120
             }
-            return Body(node: n, x: cos(angle) * r + Double(i % 3) * 8, y: sin(angle) * r)
+            let t = Double(i)
+            let radius = base + 26 * (t + 1).squareRoot()
+            let angle = t * golden
+            return Body(node: n, x: cos(angle) * radius, y: sin(angle) * radius)
         }
         idToIndex = Dictionary(uniqueKeysWithValues: bodies.enumerated().map { ($0.element.node.id, $0.offset) })
         springs = edgeSet.compactMap { e in
@@ -240,20 +272,25 @@ final class GraphSim: ObservableObject {
         let pinnedIdx = Set(pinned.compactMap { idToIndex[$0] })
         alpha *= 0.985
         var next = bodies
+        let n = Double(next.count)
+        // Repulsion tapers as the crowd grows and centre-gravity is a touch
+        // stronger, so hundreds of nodes settle into a compact disc rather than
+        // flinging apart.
+        let repel = 800.0 * min(1, 60 / max(n, 1)) + 200
 
         for i in next.indices {
-            var fx = -next[i].x * 0.012
-            var fy = -next[i].y * 0.012
+            var fx = -next[i].x * 0.02
+            var fy = -next[i].y * 0.02
             let ri = next[i].node.kind.radius
 
             for j in next.indices where j != i {
                 let dx = next[i].x - next[j].x
                 let dy = next[i].y - next[j].y
-                let d2 = max(dx * dx + dy * dy, 25)
-                let strength = 900.0 + (ri + next[j].node.kind.radius) * 40
-                let f = strength / d2
-                fx += dx / sqrt(d2) * f
-                fy += dy / sqrt(d2) * f
+                let d2 = max(dx * dx + dy * dy, 100)
+                let f = (repel + (ri + next[j].node.kind.radius) * 30) / d2
+                let d = sqrt(d2)
+                fx += dx / d * f
+                fy += dy / d * f
             }
             next[i].vx = (next[i].vx + fx) * 0.6
             next[i].vy = (next[i].vy + fy) * 0.6
@@ -270,10 +307,15 @@ final class GraphSim: ObservableObject {
             next[s.j].vy -= dy / d * f
         }
 
+        let vmax = 40.0 // cap velocity so the layout can never fling off-screen
         for i in next.indices {
             if pinnedIdx.contains(i) { next[i].vx = 0; next[i].vy = 0; continue } // held by the user
-            next[i].x += next[i].vx * alpha * 4
-            next[i].y += next[i].vy * alpha * 4
+            next[i].vx = min(max(next[i].vx, -vmax), vmax)
+            next[i].vy = min(max(next[i].vy, -vmax), vmax)
+            next[i].x += next[i].vx * alpha * 3
+            next[i].y += next[i].vy * alpha * 3
+            next[i].x = min(max(next[i].x, -6000), 6000) // hard guard vs runaway
+            next[i].y = min(max(next[i].y, -6000), 6000)
         }
         bodies = next
     }
@@ -332,6 +374,7 @@ struct GraphView: View {
     @State private var magnifyBase: CGFloat?
     @State private var draggingNodeID: String?
     @State private var nameDraft = ""
+    @State private var viewSize: CGSize = .zero
 
     private var selectedMemory: GraphNode? {
         if let s = sim.selected, case .memory(let n) = s.kind { return n }
@@ -346,6 +389,8 @@ struct GraphView: View {
         ZStack(alignment: .topLeading) {
             GeometryReader { geo in
                 canvas(size: geo.size)
+                    .onAppear { viewSize = geo.size }
+                    .onChange(of: geo.size) { viewSize = geo.size }
                     .gesture(boardDrag(size: geo.size))
                     .gesture(magnifyGesture)
                     .onContinuousHover { phase in
@@ -402,6 +447,36 @@ struct GraphView: View {
             if let n = selectedMemory {
                 nameDraft = n.title == "Untitled" ? "" : n.title
             }
+        }
+        // Auto-frame the whole graph once nodes appear, and again after the
+        // force-layout settles (large graphs expand well past the viewport).
+        .onChange(of: sim.loading) {
+            guard !sim.loading else { return }
+            for delay in [0.4, 2.0, 4.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { fit() }
+            }
+        }
+    }
+
+    /// Frame every node within the viewport (zoom + pan). Handles the "graph is
+    /// too big / off-screen" case after a large import.
+    private func fit(animated: Bool = true) {
+        guard viewSize.width > 1, !sim.bodies.isEmpty else { return }
+        var minX = Double.greatestFiniteMagnitude, minY = Double.greatestFiniteMagnitude
+        var maxX = -Double.greatestFiniteMagnitude, maxY = -Double.greatestFiniteMagnitude
+        for b in sim.bodies {
+            minX = min(minX, b.x); maxX = max(maxX, b.x)
+            minY = min(minY, b.y); maxY = max(maxY, b.y)
+        }
+        let w = max(maxX - minX, 1), h = max(maxY - minY, 1)
+        let pad = 90.0
+        let scale = min(max(min((viewSize.width - pad) / w, (viewSize.height - pad) / h), 0.12), 1.6)
+        let cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
+        let target = GraphTransform(scale: scale, pan: CGSize(width: -cx * scale, height: -cy * scale))
+        if animated {
+            withAnimation(.easeInOut(duration: 0.45)) { transform = target }
+        } else {
+            transform = target
         }
     }
 
@@ -576,6 +651,8 @@ struct GraphView: View {
             .pickerStyle(.segmented)
             .frame(width: 190)
             .onChange(of: sim.scope) { sim.load(engine: engine) }
+            Button { fit() } label: { Image(systemName: "arrow.up.backward.and.arrow.down.forward") }
+                .buttonStyle(.plain).foregroundStyle(Theme.ink(0.55)).help("Fit to view")
             Button { sim.load(engine: engine) } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.plain).foregroundStyle(Theme.ink(0.55)).help("Refresh")
         }

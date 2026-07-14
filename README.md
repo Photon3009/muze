@@ -10,8 +10,6 @@ Muze passively watches your screen, reads the text on it with on-device OCR, and
 into a searchable memory. Then it gives you three ways in: **Chat**, **Graph**, and **Canvas**.
 All of it runs on `localhost` — **nothing ever leaves your machine.**
 
-`Rewind × Supermemory × a little mythology` — built on `localhost:6767`.
-
 </div>
 
 ---
@@ -37,17 +35,31 @@ Plus, on the side:
 
 ## 🗜 The storage trick — a year of memory in single-digit GB
 
-Screens are huge; text is tiny. **Muze never persists pixels.**
+Screens are huge; text is tiny. **Muze never persists pixels.** A naive screen recorder at
+one 1440p frame every 5 seconds is **~50–100 GB a day**; Muze's daily take is **a few MB**,
+because every frame has to survive six layers of filtering and compression before it costs
+any disk at all:
 
 ```
 every 5s:  📸 capture ─▶ 🔁 dHash dedupe ─▶ 👁 Vision OCR ─▶ 🗑 discard the frame
                                                           └─▶ 💾 keep ~2–5 KB of text
 ```
 
-- **~90% of frames are dropped** by a 64-bit perceptual hash before OCR — static screens and idle
-  time cost nothing.
-- Consecutive frames from the same window with **>0.95 text similarity** merge into one memory
-  (scrolling a document ≠ 40 memories).
+| # | Layer | What it saves |
+|---|-------|---------------|
+| 1 | **Don't capture at all** | Idle (>2 min), locked screen, low battery (optional), and privacy-blocked apps/domains produce **zero bytes** — blocked frames die *before* OCR, so sensitive screens are never even read. |
+| 2 | **Perceptual dedupe** | A 64-bit dHash against the last 5 frames drops **~90% of captures** — static screens and unchanged windows cost nothing. |
+| 3 | **Scroll-merge** | Same app + window with **>0.95 text similarity** (Jaccard) just refreshes the previous row's timestamp — scrolling a document ≠ 40 new memories. |
+| 4 | **Pixels → text** | The frame is OCR'd (Apple Vision) and **thrown away**; what's kept is ~2–5 KB of text. Thumbnails are opt-in: 480px HEIC at 0.4 quality (~20 KB each). |
+| 5 | **One memory per session, not per frame** | Frames group into app-sessions (up to 40 frames / 5-min idle cutoff). Only lines **never seen earlier in the session** make the digest (capped at 6 KB) — repeated UI chrome vanishes. |
+| 6 | **Summarize before ingest** | The LLM turns each session into a 1–2 sentence summary + a handful of facts; *that* is what the supermemory engine indexes. The raw OCR text stays local in SQLite. |
+
+And time cleans up after itself:
+
+- **Thumbnails auto-prune** after N days (default 30, Settings → General) — **text is kept forever**,
+  because text is what answers questions and it's nearly free.
+- **Forget-a-time-range** (Settings) deletes an hour, a day, whatever — from both the local
+  SQLite and the memory engine.
 
 **A full day is a few MB. A year fits in single-digit GB.**
 
@@ -108,6 +120,42 @@ flowchart LR
 Muze groups frames into **app-sessions** and builds *one* rich memory per session — a first-person
 summary + facts + tags, produced by the local LLM. Full OCR stays in local SQLite; enrichment runs
 on a **crash-safe background queue** that never blocks capture.
+
+---
+
+## 🔗 How Muze captures links & context — two sources, not one
+
+The key thing: **links are _not_ scraped out of the screenshot.** Muze pulls info from two
+completely different places and reconciles them.
+
+| Info | Where it comes from | How |
+|---|---|---|
+| **App name + bundle ID** | The OS | `NSWorkspace.shared.frontmostApplication` |
+| **Window title** | The OS | macOS Accessibility API — `AXFocusedWindow` → `AXTitle` |
+| **Browser URL + tab title** | The OS | AppleScript asking the browser directly |
+| **On-screen text** (the actual content) | The pixels | Apple Vision OCR |
+
+So the URL is asked **from the browser itself**, never read out of the image. OCR only reads the
+visible text content — it's not where the link comes from.
+
+**Picking the right tab.** A browser has many windows, each with an active tab, so AppleScript
+returns *all* of them. Which one is actually on screen? That's the one problem OCR solves — Muze
+matches a tab's hostname (e.g. `youtube.com`) or distinctive title words against the OCR'd text:
+
+```mermaid
+flowchart TD
+    A["AppleScript → every active tab<br/>(url + title)"] --> C{"a tab's hostname<br/>appears in the OCR text?"}
+    B["👁 OCR the screenshot"] --> C
+    C -- yes --> D["✅ that tab → attach its URL"]
+    C -- no --> E{"enough distinctive<br/>title words on screen?"}
+    E -- yes --> F["✅ best-scoring tab"]
+    E -- no --> G["↩ fall back to front-window tab"]
+```
+
+This is why **Accessibility / Automation permission** is required — without it, the browser refuses
+to hand over the URL. The matched URL and title are stored as **structured metadata** on the memory
+(alongside `app_name`, `window_title`, `captured_at`), so you can later filter and cite by link,
+app, or time — not just fuzzy text.
 
 ---
 

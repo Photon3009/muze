@@ -58,6 +58,8 @@ enum MainTab: String, CaseIterable {
     case home = "Home"
     case graph = "Memory Graph"
     case canvas = "Canvas"
+    case goals = "Goals"
+    case connectors = "Connectors"
     case settings = "Settings"
 
     var icon: String {
@@ -65,6 +67,8 @@ enum MainTab: String, CaseIterable {
         case .home: return "sparkle"
         case .graph: return "circle.hexagongrid.fill"
         case .canvas: return "scribble.variable"
+        case .goals: return "target"
+        case .connectors: return "tray.and.arrow.down"
         case .settings: return "gearshape"
         }
     }
@@ -72,6 +76,7 @@ enum MainTab: String, CaseIterable {
 
 struct MainView: View {
     @EnvironmentObject var engine: Engine
+    @ObservedObject private var goalStore = GoalStore.shared
     @State var tab: MainTab
 
     init(initialTab: MainTab = .home) {
@@ -88,10 +93,36 @@ struct MainView: View {
                 content.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .overlay(alignment: .top) { breachBanner }
         .background(MarbleBackground(grainy: tab != .home))
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: .muzeSwitchTab)) { note in
             if let t = note.object as? MainTab { tab = t }
+        }
+    }
+
+    /// Global nudge when a limit goal is over budget — dismissible, and jumps
+    /// to the Goals tab on tap. Only shows off the Goals tab (which shows its
+    /// own breach cards).
+    @ViewBuilder private var breachBanner: some View {
+        if tab != .goals, let g = goalStore.activeBreaches.first {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.accent)
+                Text("You've passed your \(g.minutes)-min limit on \(g.target).")
+                    .font(Theme.ui(12, .medium)).foregroundStyle(Theme.ink)
+                Spacer()
+                Button("View") { tab = .goals }
+                    .buttonStyle(.plain).font(Theme.ui(12, .semibold)).foregroundStyle(Theme.accent)
+                Button { goalStore.acknowledge(g) } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                }.buttonStyle(.plain).foregroundStyle(Theme.ink(0.5))
+            }
+            .padding(.horizontal, 16).padding(.vertical, 11)
+            .background(Theme.surface, in: Capsule())
+            .overlay(Capsule().stroke(Theme.accent.opacity(0.4)))
+            .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
+            .padding(.top, 14)
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
@@ -172,6 +203,9 @@ struct MainView: View {
                     .frame(width: 18)
                 Text(t.rawValue).font(Theme.ui(13, active ? .medium : .regular))
                 Spacer()
+                if t == .goals, !goalStore.activeBreaches.isEmpty {
+                    Circle().fill(Theme.accent).frame(width: 6, height: 6)
+                }
             }
             .padding(.vertical, 9)
             .padding(.horizontal, 12)
@@ -189,6 +223,8 @@ struct MainView: View {
         case .home: ChatView()
         case .graph: GraphView()
         case .canvas: CanvasBoardView()
+        case .goals: GoalsView()
+        case .connectors: ConnectorsView()
         case .settings: SettingsView()
         }
     }

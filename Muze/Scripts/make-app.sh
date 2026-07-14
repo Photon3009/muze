@@ -13,6 +13,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp ".build/$CONF/Muze" "$APP/Contents/MacOS/Muze"
 cp Resources/Muze.icns "$APP/Contents/Resources/Muze.icns"
 [ -f Resources/home-bg-default.png ] && cp Resources/home-bg-default.png "$APP/Contents/Resources/home-bg-default.png"
+[ -f Resources/recall.png ] && cp Resources/recall.png "$APP/Contents/Resources/recall.png"
+[ -f Resources/recall-launch.jpg ] && cp Resources/recall-launch.jpg "$APP/Contents/Resources/recall-launch.jpg"
 if [ -d Resources/Fonts ]; then
   mkdir -p "$APP/Contents/Resources/Fonts"
   cp Resources/Fonts/*.ttf "$APP/Contents/Resources/Fonts/" 2>/dev/null || true

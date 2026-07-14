@@ -54,9 +54,9 @@ actor GraphService {
 
         var tags: [String] {
             switch self {
-            case .saved: return [Settings.savedTag]
+            case .saved: return [Settings.savedTag, ConnectorImport.tag]
             case .screen: return ["recall"]
-            case .all: return [Settings.savedTag, "recall", "constellation"]
+            case .all: return [Settings.savedTag, "recall", "constellation", ConnectorImport.tag]
             }
         }
     }
@@ -72,49 +72,88 @@ actor GraphService {
         var supermemoryKey: String
     }
 
+    /// Full build (nodes + semantic edges). Kept for callers that want both.
     func build(_ settings: SettingsSnapshot, scope: Scope = .saved) async -> (nodes: [GraphNode], edges: [GraphEdge]) {
+        let nodes = await nodesOnly(settings, scope: scope)
+        let edges = await semanticEdges(settings, scope: scope)
+        return (nodes, edges)
+    }
+
+    /// Just the nodes — one paginated list call, no per-doc search. Fast enough
+    /// to render the graph immediately even with hundreds of memories.
+    func nodesOnly(_ settings: SettingsSnapshot, scope: Scope = .saved) async -> [GraphNode] {
         tags = scope.tags
+        return await listAllDocuments(settings).map { node(from: $0) }
+    }
+
+    /// Semantic memory↔memory edges. Neighbour searches run concurrently
+    /// (bounded) and are cached per (docID, updatedAt), so the first build over
+    /// a large import is quick and subsequent ones are near-instant.
+    func semanticEdges(_ settings: SettingsSnapshot, scope: Scope = .saved) async -> [GraphEdge] {
+        tags = scope.tags
+        let localTags = tags
         let docs = await listAllDocuments(settings)
         var byRef: [String: String] = [:]
-        for d in docs {
-            if let ref = d.metadata["ref"] as? String { byRef[ref] = d.id }
-        }
-
-        var edges: Set<GraphEdge> = []
-        for doc in docs {
-            let cacheKey = "\(doc.id):\(doc.updatedAt)"
-            var neighbors = await Store.shared.cachedNeighbors(key: cacheKey)
-            if neighbors == nil {
-                neighbors = await findNeighbors(doc: doc, byRef: byRef, settings: settings)
-                if let n = neighbors {
-                    await Store.shared.cacheNeighbors(key: cacheKey, neighbors: n)
-                }
-            }
-            for n in neighbors ?? [] where n.id != doc.id {
-                let (a, b) = doc.id < n.id ? (doc.id, n.id) : (n.id, doc.id)
-                edges.insert(GraphEdge(a: a, b: b, weight: n.score))
-            }
-        }
-
-        let nodes = docs.map { d in
-            GraphNode(
-                id: d.id,
-                title: GraphNames.name(for: d.id) ?? d.title,
-                app: (d.metadata["app_name"] as? String) ?? (d.metadata["app"] as? String) ?? "note",
-                kind: (d.metadata["source"] as? String) == "screen-capture" ? "recall" : "capture",
-                thumb: d.metadata["thumb"] as? String,
-                file: d.metadata["file"] as? String,
-                url: d.metadata["url"] as? String,
-                createdAt: (d.metadata["captured_at"] as? String) ?? d.createdAt,
-                tags: ((d.metadata["tags"] as? String) ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
-                summary: d.summary,
-                bundleID: (d.metadata["app"] as? String) ?? ""
+        for d in docs { if let ref = d.metadata["ref"] as? String { byRef[ref] = d.id } }
+        let jobs = docs.map { d in
+            NeighborJob(
+                id: d.id, updatedAt: d.updatedAt,
+                query: [d.title, d.summary].filter { !$0.isEmpty }.joined(separator: " — ")
             )
         }
-        return (nodes, Array(edges))
+
+        var edgeSet: Set<GraphEdge> = []
+        let maxConcurrent = 8
+        var next = 0
+        await withTaskGroup(of: (String, [Neighbor]).self) { group in
+            func schedule(_ job: NeighborJob) {
+                group.addTask {
+                    let key = "\(job.id):\(job.updatedAt)"
+                    if let cached = await Store.shared.cachedNeighbors(key: key) {
+                        return (job.id, cached)
+                    }
+                    let found = await Self.neighbors(job: job, tags: localTags, byRef: byRef, settings: settings)
+                    await Store.shared.cacheNeighbors(key: key, neighbors: found)
+                    return (job.id, found)
+                }
+            }
+            while next < jobs.count && next < maxConcurrent { schedule(jobs[next]); next += 1 }
+            for await (docID, found) in group {
+                for n in found where n.id != docID {
+                    let (a, b) = docID < n.id ? (docID, n.id) : (n.id, docID)
+                    edgeSet.insert(GraphEdge(a: a, b: b, weight: n.score))
+                }
+                if next < jobs.count { schedule(jobs[next]); next += 1 }
+            }
+        }
+        return Array(edgeSet)
+    }
+
+    private func node(from d: Doc) -> GraphNode {
+        GraphNode(
+            id: d.id,
+            title: GraphNames.name(for: d.id) ?? d.title,
+            app: (d.metadata["app_name"] as? String) ?? (d.metadata["app"] as? String) ?? "note",
+            kind: (d.metadata["source"] as? String) == "screen-capture" ? "recall" : "capture",
+            thumb: d.metadata["thumb"] as? String,
+            file: d.metadata["file"] as? String,
+            url: d.metadata["url"] as? String,
+            createdAt: (d.metadata["captured_at"] as? String) ?? d.createdAt,
+            tags: ((d.metadata["tags"] as? String) ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+            summary: d.summary,
+            bundleID: (d.metadata["app"] as? String) ?? ""
+        )
     }
 
     // MARK: internals
+
+    /// Sendable unit of work for concurrent neighbour search (Doc isn't
+    /// Sendable because of its [String: Any] metadata).
+    struct NeighborJob: Sendable {
+        let id: String
+        let updatedAt: String
+        let query: String
+    }
 
     struct Doc {
         let id: String
@@ -129,7 +168,7 @@ actor GraphService {
         var docs: [Doc] = []
         var page = 1
         while true {
-            guard let data = try? await postJSON(
+            guard let data = try? await Self.postJSON(
                 settings, path: "v3/documents/list",
                 body: ["containerTags": tags, "limit": 100, "page": page, "sort": "createdAt", "order": "desc"]
             ), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { break }
@@ -158,8 +197,10 @@ actor GraphService {
         let score: Double
     }
 
-    private func findNeighbors(doc: Doc, byRef: [String: String], settings: SettingsSnapshot) async -> [Neighbor] {
-        let query = [doc.title, doc.summary].filter { !$0.isEmpty }.joined(separator: " — ")
+    /// Nonisolated so many searches can run concurrently rather than serializing
+    /// on the actor.
+    nonisolated private static func neighbors(job: NeighborJob, tags: [String], byRef: [String: String], settings: SettingsSnapshot) async -> [Neighbor] {
+        let query = job.query
         guard !query.isEmpty else { return [] }
         var found: [Neighbor] = []
         var seen = Set<String>()
@@ -172,7 +213,7 @@ actor GraphService {
                 guard let meta = r["metadata"] as? [String: Any],
                       let ref = meta["ref"] as? String,
                       let docID = byRef[ref],
-                      docID != doc.id,
+                      docID != job.id,
                       !seen.contains(docID) else { continue }
                 seen.insert(docID)
                 found.append(Neighbor(id: docID, score: (r["similarity"] as? Double) ?? 0.5))
@@ -181,7 +222,7 @@ actor GraphService {
         return Array(found.sorted { $0.score > $1.score }.prefix(4))
     }
 
-    private func postJSON(_ settings: SettingsSnapshot, path: String, body: [String: Any]) async throws -> Data {
+    nonisolated private static func postJSON(_ settings: SettingsSnapshot, path: String, body: [String: Any]) async throws -> Data {
         var req = URLRequest(url: settings.supermemoryURL.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
