@@ -64,6 +64,17 @@ enum ScreenTimeReader {
         }
     }
 
+    /// Whole-day per-app usage as display-name spans (merged across bundles),
+    /// sorted busiest first. Empty without Full Disk Access.
+    static func todayByApp() -> [AppSpan] {
+        let raw = todayUsageRaw()
+        guard !raw.isEmpty else { return [] }
+        var byName: [String: Double] = [:]
+        for r in raw { byName[name(for: r.bundle), default: 0] += r.seconds }
+        return byName.map { AppSpan(app: $0.key, seconds: $0.value) }
+            .sorted { $0.seconds > $1.seconds }
+    }
+
     /// Friendly app name for a bundle id (cached).
     static func name(for bundle: String) -> String {
         if let c = nameCache[bundle] { return c }

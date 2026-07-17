@@ -51,7 +51,7 @@ struct QuickAskView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: "sparkle").foregroundStyle(amber)
-                TextField("Ask your memory…", text: $vm.question)
+                TextField("Ask me anything…", text: $vm.question)
                     .textFieldStyle(.plain)
                     .font(Theme.ui(17))
                     .foregroundStyle(cream)
@@ -150,6 +150,7 @@ struct Resurfaced {
     let when: String // relative ("last month")
     let text: String
     let url: String?
+    var title: String? // page/video title when we have one — the card headline
 }
 
 @MainActor
@@ -160,24 +161,28 @@ final class ChatViewModel: ObservableObject {
     @Published var error: String?
     @Published var scope: GraphService.Scope = .all
     @Published var resurfaced: Resurfaced?
+    @Published var upNext: Resurfaced? // the card visibly waiting underneath
     @Published var resurfaceExhausted = false
-    private var resurfaceIDs: [String] = []
+    @Published var resurfaceNumber = 0 // 1-based position in the deck
+    @Published var resurfaceTotal = 0
+    private var resurfacePool: [SupermemoryClient.DocLite] = []
     private var resurfaceIndex = 0
 
     /// "Do you still recall this?" — resurface a random saved memory.
     func loadResurface(engine: Engine) {
         let sm = SupermemoryClient(baseURL: engine.settings.supermemoryURLValue, apiKey: engine.settings.supermemoryKey)
         Task {
-            if resurfaceIDs.isEmpty {
-                let map = await sm.refToDocID(containerTags: [Settings.savedTag, ConnectorImport.tag])
-                resurfaceIDs = Array(map.values).shuffled()
+            if resurfacePool.isEmpty {
+                resurfacePool = await sm.listDocsLite(containerTags: [Settings.savedTag, ConnectorImport.tag]).shuffled()
+                resurfaceIndex = 0
             }
-            guard !resurfaceIDs.isEmpty else { return }
+            guard !resurfacePool.isEmpty else { return }
+            resurfaceTotal = resurfacePool.count
             // No looping: once every saved memory has resurfaced, say so and close.
-            if resurfaceIndex >= resurfaceIDs.count {
+            if resurfaceIndex >= resurfacePool.count {
                 self.resurfaced = nil
                 self.resurfaceExhausted = true
-                self.resurfaceIDs = []
+                self.resurfacePool = []
                 self.resurfaceIndex = 0
                 Task {
                     try? await Task.sleep(nanoseconds: 3_500_000_000)
@@ -185,36 +190,60 @@ final class ChatViewModel: ObservableObject {
                 }
                 return
             }
-            let id = resurfaceIDs[resurfaceIndex]
+            let item = resurfacePool[resurfaceIndex]
             resurfaceIndex += 1
-            guard let (content, meta) = await sm.documentInfo(id: id) else { return }
-            let body = content.components(separatedBy: "\n\n(Saved from").first ?? content
+            resurfaceNumber = resurfaceIndex
 
-            var domain: String?
-            var label = meta["app_name"] ?? "somewhere"
-            if let url = meta["url"], let host = URL(string: url)?.host?.lowercased() {
-                domain = host.replacingOccurrences(of: "www.", with: "")
-                if domain!.contains("x.com") || domain!.contains("twitter") { label = "X" }
-                else if let d = domain { label = d.components(separatedBy: ".").dropLast().last?.capitalized ?? d }
+            // Full content when the engine serves it; the list row is the
+            // fallback (GET /v3/documents/{id} 500s on engine 0.0.5).
+            var meta = item.meta
+            var body: String
+            if let (content, fullMeta) = await sm.documentInfo(id: item.id) {
+                meta = fullMeta
+                body = content.components(separatedBy: "\n\n(Saved from").first ?? content
+            } else {
+                body = item.summary.isEmpty ? item.title : item.summary
             }
-            let kind = meta["kind"] == "region-ocr" ? "a snippet" : (domain != nil ? "this" : "a note")
-
-            var when = ""
-            if let iso = meta["captured_at"], let date = ISO8601DateFormatter().date(from: iso) {
-                let f = RelativeDateTimeFormatter()
-                f.unitsStyle = .full
-                when = f.localizedString(for: date, relativeTo: Date())
-            }
-            self.resurfaced = Resurfaced(
-                source: "You saved \(kind) from \(label) \(when)",
-                sourceLabel: label,
-                domain: domain,
-                bundleID: meta["app"],
-                when: when,
-                text: String(body.prefix(400)),
-                url: meta["url"]
-            )
+            self.resurfaced = Self.makeResurfaced(body: body, meta: meta)
+            // Peek the card underneath, so the deck never shows a blank face.
+            self.upNext = peekNext()
         }
+    }
+
+    /// The next card's face, built cheaply from the list row (no extra fetch).
+    private func peekNext() -> Resurfaced? {
+        guard resurfaceIndex < resurfacePool.count else { return nil }
+        let item = resurfacePool[resurfaceIndex]
+        let body = item.summary.isEmpty ? item.title : item.summary
+        return Self.makeResurfaced(body: body, meta: item.meta)
+    }
+
+    private static func makeResurfaced(body: String, meta: [String: String]) -> Resurfaced {
+        var domain: String?
+        var label = meta["app_name"] ?? "somewhere"
+        if let url = meta["url"], let host = URL(string: url)?.host?.lowercased() {
+            domain = host.replacingOccurrences(of: "www.", with: "")
+            if domain!.contains("x.com") || domain!.contains("twitter") { label = "X" }
+            else if let d = domain { label = d.components(separatedBy: ".").dropLast().last?.capitalized ?? d }
+        }
+        let kind = meta["kind"] == "region-ocr" ? "a snippet" : (domain != nil ? "this" : "a note")
+
+        var when = ""
+        if let iso = meta["captured_at"], let date = ISO8601DateFormatter().date(from: iso) {
+            let f = RelativeDateTimeFormatter()
+            f.unitsStyle = .full
+            when = f.localizedString(for: date, relativeTo: Date())
+        }
+        return Resurfaced(
+            source: "You saved \(kind) from \(label) \(when)",
+            sourceLabel: label,
+            domain: domain,
+            bundleID: meta["app"],
+            when: when,
+            text: String(body.prefix(400)),
+            url: meta["url"],
+            title: meta["page_title"]
+        )
     }
 
     func ask(engine: Engine) {
@@ -302,7 +331,7 @@ final class ChatViewModel: ObservableObject {
 
                 var messages: [[String: String]] = [
                     ["role": "system", "content": """
-                    You are Muze — the user's sharp, well-read thinking partner with perfect memory of what they've seen and saved. Right now it is \(df.string(from: Date())). The retrieved memories below (each tagged [n] with time + app) are your CONTEXT, not your answer.
+                    You are Muze — the cofounder of the user's life: a sharp, loyal partner with perfect memory of everything they've seen and saved, invested in helping them win. Right now it is \(df.string(from: Date())). The retrieved memories below (each tagged [n] with time + app) are your CONTEXT, not your answer.
                     How to respond:
                     - Lead with the insight, not the inventory. The user can already see their memories in the app — never narrate "you saved X, you saved Y" or "these are your memories." Instead, answer what they actually asked and add something they'd value: connect the dots across memories, surface a pattern or tension, draw the implication, or give a genuinely useful take.
                     - Write like a smart friend who remembers everything: natural, specific, confident. No preamble, no "based on your memories", no bullet-point dumps unless asked.
@@ -330,11 +359,16 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-/// Bundled artwork used behind the "Still recall this?" card (Michelangelo's
-/// hands). Loaded once.
+/// Bundled artwork used behind the "Still recall this?" card. Loaded once.
 enum RecallArt {
     static let image: NSImage? = {
         guard let url = Bundle.main.url(forResource: "recall", withExtension: "png") else { return nil }
+        return NSImage(contentsOf: url)
+    }()
+
+    /// The cut-out Creation-of-Adam hands — the resurface card's decoration.
+    static let deck: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "recall-nobg", withExtension: "png") else { return nil }
         return NSImage(contentsOf: url)
     }()
 }
@@ -348,6 +382,9 @@ struct ChatView: View {
     @State private var insights: [Insight] = InsightsService.cached
     @State private var insightIdx = 0
     @ObservedObject private var iconStore = IconStore.shared
+    // Resurface-deck swipe state: the card tracks the drag, then flies off.
+    @State private var cardDrag: CGSize = .zero
+    @State private var cardFlying = false
 
     private let card = Theme.surface
     private let amber = Theme.gold
@@ -379,12 +416,10 @@ struct ChatView: View {
                         .kerning(1.5)
                         .foregroundStyle(Theme.ink(0.4))
                     (
-                        Text("Rediscover").foregroundColor(Theme.accent)
-                            + Text(" what you've saved, or ").foregroundColor(cream)
-                            + Text("ask").foregroundColor(Theme.accent)
-                            + Text(" your memory anything.").foregroundColor(cream)
+                        Text("Everything you've seen, remembered. ").foregroundColor(cream)
+                            + Text("Ask me anything.").foregroundColor(Theme.accent)
                     )
-                    .font(Theme.display(30, .medium))
+                    .font(Theme.display(26, .medium))
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
                 }
@@ -394,7 +429,7 @@ struct ChatView: View {
 
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(Theme.ink(0.45))
-                TextField("Ask your memory anything…", text: $vm.question)
+                TextField("Ask me anything you've seen…", text: $vm.question)
                     .textFieldStyle(.plain)
                     .font(Theme.ui(16))
                     .foregroundStyle(cream)
@@ -491,11 +526,8 @@ struct ChatView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if vm.turns.isEmpty {
-                VStack(alignment: .trailing, spacing: 12) {
-                    if !insights.isEmpty { noticedCard }
-                    resurfaceCard
-                }
-                .padding(30)
+                resurfaceCard
+                    .padding(30)
             }
         }
         .background(homeBackdrop)
@@ -506,7 +538,6 @@ struct ChatView: View {
             focused = true
             bgImage = HomeBackground.image
             vm.loadResurface(engine: engine)
-            loadInsights()
         }
     }
 
@@ -689,83 +720,189 @@ struct ChatView: View {
 
     /// The reference card: warm angular-gradient frame, source icon,
     /// "You saved … last month", body text, centered "Check next".
+    /// Type on the dark card — white, softened via opacity where needed.
+    private var cardInk: Color { .white }
+    /// The card's dark fill, a touch deeper than the app surface.
+    private var cardFill: Color { Color(hex: "#1C1B19") }
+
+    /// The deck's shared artwork — the Creation-of-Adam hands (recall2),
+    /// washed lightly so dark serif type reads like print on the fresco.
     private var resurfaceCard: some View {
-        Group {
+        ZStack {
+            // The deepest card — a plain dark back peeking out.
+            deckBack(rotation: 4, offset: CGSize(width: 10, height: 9))
+
+            // The card underneath is a REAL card: the next memory, waiting.
+            if let next = vm.upNext {
+                cardFace(next, number: vm.resurfaceNumber + 1)
+                    .rotationEffect(.degrees(-2.5))
+                    .offset(x: -7, y: 9)
+                    .scaleEffect(0.985)
+                    .allowsHitTesting(false)
+            } else {
+                deckBack(rotation: -3, offset: CGSize(width: -9, height: 11))
+            }
+
             if vm.resurfaceExhausted {
-                VStack(spacing: 8) {
-                    Text("✦").font(.title2).foregroundStyle(cream)
-                    Text("You've revisited everything you saved.")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(cream.opacity(0.9))
-                    Text("New memories will resurface here.")
-                        .font(.caption).foregroundStyle(cream.opacity(0.5))
+                cardFrame {
+                    VStack(spacing: 8) {
+                        Text("\u{2726}").font(.title2).foregroundStyle(Theme.accent)
+                        Text("You've drawn the whole deck.")
+                            .font(.system(size: 15, design: .serif).weight(.medium))
+                            .foregroundStyle(cardInk)
+                        Text("New memories will resurface here.")
+                            .font(Theme.ui(11)).foregroundStyle(cardInk.opacity(0.55))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(18)
-                .frame(width: 300, height: 208)
-                .background(recallCardBG)
-                .grain(cornerRadius: 10)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
                 .transition(.opacity)
             } else if let r = vm.resurfaced {
-                VStack(alignment: .leading, spacing: 9) {
-                    Text("STILL RECALL THIS?")
-                        .font(Theme.ui(9, .semibold)).kerning(1.6)
-                        .foregroundStyle(Theme.ink(0.4))
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 10) {
-                            Group {
-                                if let icon = IconStore.shared.icon(label: r.sourceLabel, domain: r.domain, bundleID: r.bundleID) {
-                                    Image(nsImage: icon).resizable().aspectRatio(contentMode: .fill)
-                                } else {
-                                    ZStack {
-                                        Color.black
-                                        Text(String(r.sourceLabel.prefix(1))).font(Theme.ui(13, .semibold)).foregroundStyle(.white)
-                                    }
-                                }
-                            }
-                            .frame(width: 28, height: 28)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                            Text(r.source)
-                                .font(Theme.ui(12, .semibold))
-                                .foregroundStyle(Theme.ink)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Text(r.text)
-                            .font(Theme.ui(12))
-                            .foregroundStyle(Theme.ink(0.75))
-                            .lineLimit(3)
-                    }
-                    .padding(11)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.bg.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
-
-                    Spacer(minLength: 0)
-
-                    HStack(spacing: 12) {
-                        if let url = r.url, let u = URL(string: url) {
-                            Link("Revisit →", destination: u)
-                                .font(Theme.ui(11, .medium))
-                                .foregroundStyle(Theme.accent)
-                        }
-                        Spacer()
-                        Button("Next →") { vm.loadResurface(engine: engine) }
-                            .buttonStyle(.plain)
-                            .font(Theme.ui(11, .medium))
-                            .foregroundStyle(Theme.ink(0.55))
-                    }
-                }
-                .padding(14)
-                .frame(width: 300, height: 208, alignment: .topLeading)
-                .background(recallCardBG)
-                .grain(cornerRadius: 10)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
-                .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
+                frontCard(r)
+                    .id(vm.resurfaceNumber)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.94).combined(with: .opacity),
+                        removal: .opacity // the swipe already carried it off-screen
+                    ))
             }
         }
+        .animation(.spring(response: 0.45, dampingFraction: 0.75), value: vm.resurfaceNumber)
+    }
+
+    /// A face-down card at the bottom of the stack — dark, quiet.
+    private func deckBack(rotation: Double, offset: CGSize) -> some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(cardFill)
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.09)))
+            .frame(width: 316, height: 178)
+            .rotationEffect(.degrees(rotation))
+            .offset(offset)
+            .shadow(color: .black.opacity(0.3), radius: 6, y: 4)
+    }
+
+    /// Card chrome: a dark iOS-cornered rectangle with the cut-out hands
+    /// floating on it at half opacity; the memory reads in white on top.
+    private func cardFrame<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(width: 316, height: 178, alignment: .topLeading)
+            .background {
+                ZStack {
+                    cardFill
+                    if let img = RecallArt.deck {
+                        Image(nsImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .opacity(0.5)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.1)))
+            .shadow(color: .black.opacity(0.45), radius: 12, y: 6)
+    }
+
+    /// The card's face — meta row, headline, body, whispered affordances.
+    private func cardFace(_ r: Resurfaced, number: Int) -> some View {
+        cardFrame {
+            VStack(alignment: .leading, spacing: 0) {
+                // Meta row: source left, age right — serif italics, like the deck.
+                HStack(spacing: 6) {
+                    Group {
+                        if let icon = IconStore.shared.icon(label: r.sourceLabel, domain: r.domain, bundleID: r.bundleID) {
+                            Image(nsImage: icon).resizable().aspectRatio(contentMode: .fill)
+                        } else {
+                            ZStack {
+                                Color.black
+                                Text(String(r.sourceLabel.prefix(1))).font(Theme.ui(9, .bold)).foregroundStyle(Theme.ink)
+                            }
+                        }
+                    }
+                    .frame(width: 14, height: 14)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    Text(r.sourceLabel)
+                        .font(.system(size: 11, design: .serif).italic().weight(.semibold))
+                        .foregroundStyle(cardInk)
+                    Spacer()
+                    Text(r.when.isEmpty ? "a while ago" : r.when)
+                        .font(.system(size: 11, design: .serif).italic())
+                        .foregroundStyle(cardInk.opacity(0.7))
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+
+                // Headline + body — dark serif printed on the fresco.
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(r.title ?? r.source)
+                        .font(.system(size: 17, design: .serif).weight(.medium))
+                        .foregroundStyle(cardInk)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(r.text)
+                        .font(Theme.ui(11))
+                        .foregroundStyle(cardInk.opacity(0.75))
+                        .lineSpacing(2)
+                        .lineLimit(r.title == nil ? 5 : 4)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 9)
+
+                Spacer(minLength: 0)
+
+                // Footer: no buttons — just the affordances, whispered.
+                HStack {
+                    Text(r.url != nil ? "tap to revisit" : "a note to yourself")
+                        .font(.system(size: 10, design: .serif).italic())
+                        .foregroundStyle(cardInk.opacity(0.55))
+                    Spacer()
+                    Text("swipe \u{00B7} \(number) of \(vm.resurfaceTotal)")
+                        .font(Theme.mono(8.5))
+                        .foregroundStyle(cardInk.opacity(0.55))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private func frontCard(_ r: Resurfaced) -> some View {
+        // Each draw lands with its own slight tilt — hand-dealt, not printed.
+        let tilt = Double((vm.resurfaceNumber * 37) % 5 - 2) * 0.5
+        return cardFace(r, number: vm.resurfaceNumber)
+            .rotationEffect(.degrees(tilt + Double(cardDrag.width) / 18))
+            .offset(cardDrag)
+            .gesture(
+                DragGesture()
+                    .onChanged { v in
+                        if !cardFlying { cardDrag = v.translation }
+                    }
+                    .onEnded { v in
+                        let dx = v.translation.width
+                        guard abs(dx) > 70 else {
+                            // Not a committed swipe — snap back onto the deck.
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { cardDrag = .zero }
+                            return
+                        }
+                        // Fly off in the direction of the swipe, then draw the next.
+                        cardFlying = true
+                        withAnimation(.easeIn(duration: 0.22)) {
+                            cardDrag = CGSize(width: dx < 0 ? -560 : 560, height: v.translation.height - 70)
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+                            vm.loadResurface(engine: engine)
+                            cardDrag = .zero
+                            cardFlying = false
+                        }
+                    }
+            )
+            .onTapGesture {
+                if let url = r.url, let u = URL(string: url) {
+                    NSWorkspace.shared.open(u)
+                }
+            }
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
     }
 }
 

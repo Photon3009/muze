@@ -105,6 +105,42 @@ struct SupermemoryClient {
         (await documentInfo(id: id))?.content
     }
 
+    /// Everything the list endpoint knows about a doc — enough to render a
+    /// card without `GET /v3/documents/{id}` (broken on engine 0.0.5).
+    struct DocLite {
+        let id: String
+        let title: String
+        let summary: String
+        let meta: [String: String]
+    }
+
+    func listDocsLite(containerTags: [String]) async -> [DocLite] {
+        var out: [DocLite] = []
+        var page = 1
+        while true {
+            guard let data = try? await request("v3/documents/list", body: [
+                "containerTags": containerTags, "limit": 100, "page": page,
+            ]), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { break }
+            for m in (obj["memories"] as? [[String: Any]]) ?? [] {
+                guard let id = m["id"] as? String, (m["status"] as? String) != "failed" else { continue }
+                var meta: [String: String] = [:]
+                for (k, v) in (m["metadata"] as? [String: Any]) ?? [:] { meta[k] = "\(v)" }
+                out.append(DocLite(
+                    id: id,
+                    title: (m["title"] as? String) ?? "",
+                    summary: (m["summary"] as? String) ?? "",
+                    meta: meta
+                ))
+            }
+            let pagination = obj["pagination"] as? [String: Any]
+            let current = (pagination?["currentPage"] as? Int) ?? page
+            let total = (pagination?["totalPages"] as? Int) ?? 1
+            if current >= total { break }
+            page = current + 1
+        }
+        return out
+    }
+
     func documentInfo(id: String) async -> (content: String, meta: [String: String])? {
         var req = URLRequest(url: baseURL.appendingPathComponent("v3/documents/\(id)"))
         req.timeoutInterval = 10

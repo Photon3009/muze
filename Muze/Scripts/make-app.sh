@@ -15,6 +15,8 @@ cp Resources/Muze.icns "$APP/Contents/Resources/Muze.icns"
 [ -f Resources/home-bg-default.png ] && cp Resources/home-bg-default.png "$APP/Contents/Resources/home-bg-default.png"
 [ -f Resources/recall.png ] && cp Resources/recall.png "$APP/Contents/Resources/recall.png"
 [ -f Resources/recall-launch.jpg ] && cp Resources/recall-launch.jpg "$APP/Contents/Resources/recall-launch.jpg"
+[ -f Resources/recall2.png ] && cp Resources/recall2.png "$APP/Contents/Resources/recall2.png"
+[ -f Resources/recall-nobg.png ] && cp Resources/recall-nobg.png "$APP/Contents/Resources/recall-nobg.png"
 if [ -d Resources/Fonts ]; then
   mkdir -p "$APP/Contents/Resources/Fonts"
   cp Resources/Fonts/*.ttf "$APP/Contents/Resources/Fonts/" 2>/dev/null || true

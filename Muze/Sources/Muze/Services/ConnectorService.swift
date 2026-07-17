@@ -22,7 +22,7 @@ enum ConnectorKind: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .chrome: return "Chrome Bookmarks"
+        case .chrome: return "Browser Bookmarks"
         case .safari: return "Safari Bookmarks"
         case .xBookmarks: return "X Bookmarks"
         case .youtube: return "YouTube"
@@ -31,7 +31,7 @@ enum ConnectorKind: String, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
-        case .chrome: return "Every bookmark from all your Chrome profiles — one click."
+        case .chrome: return "Chrome, Brave & Edge — every profile, one click."
         case .safari: return "Bookmarks & Reading List (needs Full Disk Access)."
         case .xBookmarks: return "The JSON or CSV from any X bookmarks exporter."
         case .youtube: return "Takeout playlists (Watch Later, Likes) or watch history — titles fetched automatically."
@@ -119,31 +119,41 @@ enum ConnectorImport {
         var errorDescription: String? { message }
     }
 
-    // MARK: Chrome
+    // MARK: Chromium browsers (Chrome, Brave, Edge — same Bookmarks format)
+
+    private static let chromiumRoots: [(app: String, path: String)] = [
+        ("Chrome", "Library/Application Support/Google/Chrome"),
+        ("Brave", "Library/Application Support/BraveSoftware/Brave-Browser"),
+        ("Edge", "Library/Application Support/Microsoft Edge"),
+    ]
 
     static func chromeItems() throws -> [ImportItem] {
-        let base = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Google/Chrome")
-        let profiles = (try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? []
-        let files = profiles.map { $0.appendingPathComponent("Bookmarks") }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        guard !files.isEmpty else {
-            throw Failure(message: "No Chrome bookmarks found — is Chrome installed?")
-        }
-
         var items: [ImportItem] = []
-        for file in files {
-            guard let data = try? Data(contentsOf: file),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let roots = obj["roots"] as? [String: Any] else { continue }
-            for root in roots.values {
-                walkChromeNode(root as? [String: Any], folders: [], into: &items)
+        var foundAny = false
+
+        for browser in chromiumRoots {
+            let base = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(browser.path)
+            let profiles = (try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? []
+            let files = profiles.map { $0.appendingPathComponent("Bookmarks") }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            for file in files {
+                guard let data = try? Data(contentsOf: file),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let roots = obj["roots"] as? [String: Any] else { continue }
+                foundAny = true
+                for root in roots.values {
+                    walkChromeNode(root as? [String: Any], folders: [], app: browser.app, into: &items)
+                }
             }
+        }
+        guard foundAny else {
+            throw Failure(message: "No Chrome, Brave, or Edge bookmarks found on this Mac.")
         }
         return dedupedByRef(items)
     }
 
-    private static func walkChromeNode(_ node: [String: Any]?, folders: [String], into items: inout [ImportItem]) {
+    private static func walkChromeNode(_ node: [String: Any]?, folders: [String], app: String, into items: inout [ImportItem]) {
         guard let node else { return }
         let name = node["name"] as? String ?? ""
         if node["type"] as? String == "url", let url = node["url"] as? String {
@@ -152,10 +162,10 @@ enum ConnectorImport {
             if let us = Double(node["date_added"] as? String ?? "") {
                 when = Date(timeIntervalSince1970: us / 1_000_000 - 11_644_473_600)
             }
-            items.append(bookmarkItem(title: name, url: url, folders: folders, app: "Chrome", when: when))
+            items.append(bookmarkItem(title: name, url: url, folders: folders, app: app, when: when))
         }
         for child in node["children"] as? [[String: Any]] ?? [] {
-            walkChromeNode(child, folders: name.isEmpty ? folders : folders + [name], into: &items)
+            walkChromeNode(child, folders: name.isEmpty ? folders : folders + [name], app: app, into: &items)
         }
     }
 

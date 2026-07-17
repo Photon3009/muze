@@ -289,20 +289,26 @@ final class Engine: ObservableObject {
 
     private func refreshStatsAsync() async {
         let s = await Store.shared.todayStats()
-        // Breakdown comes from Muze's own tracker — the only source that splits
-        // browser time by SITE (e.g. youtube.com), not just "Chrome".
-        let breakdown = await Store.shared.todayAppTime()
-        // Total prefers macOS's whole-day system time when available (Full Disk
-        // Access); otherwise the tracker's sum.
-        let system = await Task.detached { ScreenTimeReader.todayUsageRaw() }.value
+        // Muze's own tracker (only source that splits browser time by SITE,
+        // e.g. youtube.com) — but only accrues while Muze is running.
+        let tracker = await Store.shared.todayAppTime()
+        // macOS's own whole-day per-app usage (Screen Time / knowledgeC), read
+        // off-main. Requires Full Disk Access; empty otherwise.
+        let system = await Task.detached { ScreenTimeReader.todayByApp() }.value
         let sysUsed = !system.isEmpty
-        let total = sysUsed ? system.reduce(0) { $0 + $1.seconds } : breakdown.reduce(0) { $0 + $1.seconds }
         await MainActor.run {
             self.stats = s
-            self.appTimes = breakdown
-            self.screenTimeSeconds = total
+            // Prefer the system's whole-day per-app numbers so usage reflects
+            // the WHOLE day, not just since Muze launched. Fall back to the
+            // tracker when Full Disk Access isn't granted.
+            self.appTimes = sysUsed ? system : tracker
+            self.screenTimeSeconds = self.appTimes.reduce(0) { $0 + $1.seconds }
             self.usingSystemTime = sysUsed
-            GoalStore.shared.evaluate(appTimes: breakdown)
+            // Goals need per-site granularity too: evaluate against the system
+            // app totals PLUS the tracker's site-level entries (hosts), so both
+            // "Slack" and "substack.com" goals resolve.
+            let sites = tracker.filter { $0.app.contains(".") && !$0.app.contains(" ") }
+            GoalStore.shared.evaluate(appTimes: sysUsed ? system + sites : tracker)
         }
     }
 

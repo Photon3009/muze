@@ -10,43 +10,47 @@ struct ConnectorsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Connectors")
-                    .font(.system(size: 24, weight: .semibold, design: .serif))
-                    .foregroundStyle(Theme.ink)
-                    .padding(.top, 30)
-                Text("Pull your bookmarks and libraries into your memory. Imports are deduped — run them again anytime; only new items are added.")
-                    .font(Theme.ui(12))
-                    .foregroundStyle(Theme.ink(0.5))
-                    .padding(.bottom, 6)
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Connectors").font(Theme.display(30, .medium)).foregroundStyle(Theme.ink)
+                    Text("Pull your bookmarks and libraries into your memory — deduped, so you can re-run anytime and only new items are added.")
+                        .font(Theme.ui(12)).foregroundStyle(Theme.ink(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 40)
+                .padding(.bottom, 8)
 
                 ForEach(ConnectorKind.allCases) { kind in
                     connectorCard(kind)
                 }
 
-                Text("Everything lands in chat (⌥Space), the graph, and resurfacing — ask \"what was that article I bookmarked about pricing?\"")
-                    .font(Theme.ui(11))
-                    .foregroundStyle(Theme.ink(0.35))
-                    .padding(.top, 4)
+                HStack(spacing: 7) {
+                    Image(systemName: "sparkle").font(.system(size: 10)).foregroundStyle(Theme.accent)
+                    Text("Everything lands in chat (⌥Space), the graph and resurfacing — ask \u{201C}what was that article I bookmarked about pricing?\u{201D}")
+                        .font(Theme.ui(11)).foregroundStyle(Theme.ink(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 8)
             }
-            .frame(maxWidth: 640)
+            .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, 30)
+            .padding(.horizontal, 44)
             .padding(.bottom, 40)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(.dark)
-        .tint(Theme.gold)
+        .tint(Theme.accent)
     }
 
     private func connectorCard(_ kind: ConnectorKind) -> some View {
         let st = center.status[kind]
         return HStack(spacing: 14) {
             Image(systemName: kind.icon)
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.gold)
-                .frame(width: 38, height: 38)
-                .background(Theme.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.line))
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 40, height: 40)
+                .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.2)))
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -91,15 +95,16 @@ struct ConnectorsView: View {
                     if st.running {
                         Text(st.phase)
                             .font(Theme.mono(10))
-                            .foregroundStyle(Theme.gold.opacity(0.85))
+                            .foregroundStyle(Theme.accent.opacity(0.9))
                     } else if let summary = st.summary {
-                        Text(summary)
-                            .font(Theme.ui(11))
-                            .foregroundStyle(Theme.ink(0.65))
+                        HStack(spacing: 5) {
+                            Image(systemName: "checkmark.circle.fill").font(.system(size: 10)).foregroundStyle(Color(hex: "5Fb37e"))
+                            Text(summary).font(Theme.ui(11)).foregroundStyle(Theme.ink(0.6))
+                        }
                     } else if let error = st.error {
                         Text(error)
                             .font(Theme.ui(11))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Color(hex: "E5533D"))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -113,7 +118,7 @@ struct ConnectorsView: View {
                 Button(st?.summary != nil ? "Re-import" : kind.buttonLabel) {
                     center.run(kind, settings: engine.settings)
                 }
-                .buttonStyle(PillButton(bg: Theme.gold, fg: .black))
+                .buttonStyle(PillButton(bg: Theme.accent, fg: .black))
             }
         }
         .tablet(padding: 14)

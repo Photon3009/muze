@@ -62,7 +62,7 @@ struct OnboardingView: View {
                     .font(Theme.ui(30, .bold)).kerning(5).foregroundStyle(Theme.ink)
                     .padding(.top, 4)
 
-                Text("Muze is your quiet, local memory. It remembers what you see so you can ask, map and revisit anything later — without a single byte leaving your Mac. Grant two permissions and you're set.")
+                Text("Muze is the cofounder of your life — it remembers everything you see, keeps the threads you drop, and hands your day back to you. Nothing leaves this Mac. Grant two permissions and let's get to work.")
                     .font(Theme.ui(13)).italic()
                     .foregroundStyle(Theme.ink(0.55)).lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)

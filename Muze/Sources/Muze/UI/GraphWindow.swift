@@ -124,7 +124,7 @@ final class GraphSim: ObservableObject {
     @Published var loading = true
     @Published var selected: VizNode?
     @Published var hovered: VizNode?
-    @Published var scope: GraphService.Scope = .saved
+    @Published var scope: GraphService.Scope = .all // show saved + screen snapshots + imports by default
     @Published var fullContent: [String: String] = [:] // docID → content
 
     private var idToIndex: [String: Int] = [:]
@@ -469,8 +469,10 @@ struct GraphView: View {
             minY = min(minY, b.y); maxY = max(maxY, b.y)
         }
         let w = max(maxX - minX, 1), h = max(maxY - minY, 1)
-        let pad = 90.0
-        let scale = min(max(min((viewSize.width - pad) / w, (viewSize.height - pad) / h), 0.12), 1.6)
+        let pad = 160.0 // generous margin so the graph sits small & centred
+        // 0.82 leaves extra air; cap at 0.9 so small graphs aren't blown up.
+        let raw = min((viewSize.width - pad) / w, (viewSize.height - pad) / h) * 0.82
+        let scale = min(max(raw, 0.12), 0.9)
         let cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
         let target = GraphTransform(scale: scale, pan: CGSize(width: -cx * scale, height: -cy * scale))
         if animated {
