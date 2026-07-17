@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🪶 Muze
+# Muze
 
-### *Your mind, remembered.*
+### *co-founder of your life.*
 
 **A local-first macOS app that quietly remembers everything you see — then lets you chat with it, map it, and explore it.**
 
@@ -16,9 +16,9 @@ map it, board it, budget it.** All of it runs on `localhost` — **nothing ever 
 
 ---
 
-## 🗺 The grand tour
+## The grand tour
 
-### 💬 Home — talk to everything you've ever seen
+### Home — talk to everything you've ever seen
 
 That's it up top ☝️ — *"Everything you've seen, remembered. Ask me anything."* Ask in plain
 language — *"what was that error I saw an hour ago?"* — and get a **synthesized answer with
@@ -27,7 +27,7 @@ citations** to the actual moments, not a wall of screenshots. Summon it from any
 deck of your forgotten saves — the Creation-of-Adam hands asking *still recall this?* —
 **swipe** to draw the next one, **tap** to revisit.
 
-### 🌅 Today — your day, replayed
+### Today — your day, replayed
 
 <p align="center"><img src="images/ss/today.png" width="94%" alt="Muze — Today" /></p>
 
@@ -37,7 +37,7 @@ NOTICED** surfaces the non-obvious patterns in your day, and **🏛 TODAY YOU AR
 consumption into one of **16 mythological archetypes**. Some days you're Athena. Some days
 you're Icarus. The app doesn't lie.
 
-### 🧭 Discover — the feed of your own past
+### Discover — the feed of your own past
 
 <p align="center"><img src="images/ss/discover.png" width="94%" alt="Muze — Discover" /></p>
 
@@ -47,7 +47,7 @@ lately* (binge AI for a week and AI floats up); **Timeline** is the archive, day
 to bookmarks you made years ago. A progress bar tracks how much of your own curiosity you've
 finally consumed. *Surprise me* is the slot machine.
 
-### 🕸 Memory Graph — your mind as a constellation
+### Memory Graph — your mind as a constellation
 
 <p align="center"><img src="images/ss/graph.png" width="94%" alt="Muze — Memory Graph" /></p>
 
@@ -55,14 +55,14 @@ Every memory is a star; semantic similarity draws the lines. A hand-rolled physi
 settles hundreds of nodes into constellations you can fly through — related ideas find each
 other without you filing anything, ever.
 
-### 🎨 Canvas — think with your memories
+### Canvas — think with your memories
 
 <p align="center"><img src="images/ss/canvas.png" width="94%" alt="Muze — Canvas" /></p>
 
 A freeform board: pull saved memories out as cards, scribble, connect, arrange. It's the
 difference between *having* memories and *thinking with* them.
 
-### 🎯 Goals — your intentions, enforced by your actual screen time
+### Goals — your intentions, enforced by your actual screen time
 
 <p align="center"><img src="images/ss/goals.png" width="94%" alt="Muze — Goals" /></p>
 
@@ -71,13 +71,13 @@ site, watch live progress rings fill against your real tracked time, and get a n
 notification + in-app banner the moment you cross the line. Resets at midnight; no judgment,
 just receipts.
 
-### 🔌 Connectors — import your entire digital past, one click
+### Connectors — import your entire digital past, one click
 
 Chrome & Brave bookmarks straight off disk, **X bookmarks**, **YouTube playlists & history**
 (titles fetched automatically, no API key). Idempotent and deduped — re-run anytime, only new
 items are added. Your 2020 self's bookmarks become tonight's Discover feed.
 
-### ⚙️ Settings — the cockpit
+### Settings — the cockpit
 
 <p align="center"><img src="images/ss/settings.png" width="94%" alt="Muze — Settings" /></p>
 
@@ -89,7 +89,7 @@ domains, export everything to JSONL, or forget a time range like it never happen
 
 ---
 
-## 🗜 The storage trick — a year of memory in single-digit GB
+## The storage trick — a year of memory in single-digit GB
 
 Screens are huge; text is tiny. **Muze never persists pixels.** A naive screen recorder at
 one 1440p frame every 5 seconds is **~50–100 GB a day**; Muze's daily take is **a few MB**,
