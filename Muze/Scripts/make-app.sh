@@ -43,6 +43,8 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
   <key>ATSApplicationFontsPath</key><string>Fonts</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Muze reads the active browser tab URL to give memories context.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>With Eyes-on-screen enabled, Muze briefly checks the webcam when you go idle to tell whether you're still looking at the screen. Frames are analysed on-device and never stored or sent anywhere.</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

@@ -57,6 +57,7 @@ extension Notification.Name {
 enum MainTab: String, CaseIterable {
     case home = "Home"
     case today = "Today"
+    case focus = "Focus"
     case discover = "Discover"
     case graph = "Memory Graph"
     case canvas = "Canvas"
@@ -68,6 +69,7 @@ enum MainTab: String, CaseIterable {
         switch self {
         case .home: return "sparkle"
         case .today: return "sun.max"
+        case .focus: return "gauge.with.needle"
         case .discover: return "sparkles.rectangle.stack"
         case .graph: return "circle.hexagongrid.fill"
         case .canvas: return "scribble.variable"
@@ -226,6 +228,7 @@ struct MainView: View {
         switch tab {
         case .home: ChatView()
         case .today: TodayView()
+        case .focus: FocusView()
         case .graph: GraphView()
         case .canvas: CanvasBoardView()
         case .goals: GoalsView()

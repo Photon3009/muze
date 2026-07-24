@@ -67,6 +67,16 @@ final class Settings: ObservableObject {
     @Published var autoStartMonitoring: Bool {
         didSet { d.set(autoStartMonitoring, forKey: "autoStartMonitoring") }
     }
+    /// Labels (app names or site hosts, lowercased) that count as distractions
+    /// for the Focus tab. User-editable from the Focus view.
+    @Published var distractingLabels: [String] {
+        didSet { d.set(distractingLabels, forKey: "distractingLabels") }
+    }
+    /// Eyes-on-screen: use brief on-device webcam checks while input-idle to
+    /// tell watching (focus) from wandering (Off-screen distraction). Opt-in.
+    @Published var gazeCheckEnabled: Bool {
+        didSet { d.set(gazeCheckEnabled, forKey: "gazeCheckEnabled") }
+    }
 
     /// Deliberate "save this" memories live apart from passive screen memories.
     static let savedTag = "saved"
@@ -98,6 +108,13 @@ final class Settings: ObservableObject {
         "*.bank*", "accounts.google.com", "*.paypal.*", "signin", "checkout",
     ]
 
+    static let defaultDistractingLabels = [
+        "youtube.com", "x.com", "twitter.com", "instagram.com", "reddit.com",
+        "facebook.com", "tiktok.com", "netflix.com", "twitch.tv", "primevideo.com",
+        "linkedin.com", "news.ycombinator.com",
+        "whatsapp", "telegram", "discord", "messages",
+    ]
+
     init() {
         captureInterval = d.object(forKey: "captureInterval") as? TimeInterval ?? 5
         keepThumbnails = d.object(forKey: "keepThumbnails") as? Bool ?? true
@@ -119,5 +136,7 @@ final class Settings: ObservableObject {
         containerTag = d.string(forKey: "containerTag") ?? "recall"
         thumbnailRetentionDays = d.object(forKey: "thumbnailRetentionDays") as? Int ?? 30
         autoStartMonitoring = d.object(forKey: "autoStartMonitoring") as? Bool ?? false
+        distractingLabels = d.stringArray(forKey: "distractingLabels") ?? Settings.defaultDistractingLabels
+        gazeCheckEnabled = d.object(forKey: "gazeCheckEnabled") as? Bool ?? false
     }
 }

@@ -30,6 +30,7 @@ final class ActivityTracker {
         timer?.invalidate()
         timer = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        closeSegment()
     }
 
     @objc private func appSwitched() { tick() }
@@ -44,16 +45,57 @@ final class ActivityTracker {
     ]
 
     private func tick() {
-        // Pause on idle / locked so background time isn't counted.
-        guard !SystemState.isIdle(threshold: 120), !SystemState.isScreenLocked() else {
+        guard !SystemState.isScreenLocked() else {
             lastTick = nil
+            closeSegment()
             return
         }
-        let now = Date()
-        // Real elapsed since last tick (capped, so sleep/coalescing can't spike it).
+        if SystemState.isIdle(threshold: 120) {
+            // No input for 2+ minutes. Without the webcam check we must assume
+            // the user left. With it, eyes on the screen keep the clock
+            // running (video, long reads) and eyes elsewhere become the
+            // "Off-screen" distraction bucket.
+            guard settings.gazeCheckEnabled else {
+                lastTick = nil
+                closeSegment() // user walked away — the attention segment is over
+                return
+            }
+            Task { @MainActor in
+                switch await GazeService.shared.attention() {
+                case .screen:
+                    self.accrueFrontmost() // still watching — it counts as focus
+                case .away:
+                    self.accrueIdle(as: GazeService.offScreenLabel)
+                case .absent, .unavailable:
+                    self.lastTick = nil
+                    self.closeSegment()
+                }
+            }
+            return
+        }
+        accrueFrontmost()
+    }
+
+    /// Elapsed wall time since the last accrual (capped, so sleep/coalescing
+    /// can't spike it); nil when too small to matter.
+    private func takeElapsed(now: Date) -> Double? {
         let elapsed = min(lastTick.map { now.timeIntervalSince($0) } ?? interval, 30)
         lastTick = now
-        guard elapsed > 0.5,
+        return elapsed > 0.5 ? elapsed : nil
+    }
+
+    /// Credit elapsed time to a synthetic label (present but looking away).
+    private func accrueIdle(as label: String) {
+        let now = Date()
+        guard let elapsed = takeElapsed(now: now) else { return }
+        Task { await Store.shared.addAppTime(app: label, seconds: elapsed) }
+        accrueSegment(label: label, now: now)
+    }
+
+    /// Credit elapsed time to whatever app/site is in front (the normal path).
+    private func accrueFrontmost() {
+        let now = Date()
+        guard let elapsed = takeElapsed(now: now),
               let app = NSWorkspace.shared.frontmostApplication,
               let name = app.localizedName else { return }
         let bundleID = app.bundleIdentifier ?? ""
@@ -68,12 +110,49 @@ final class ActivityTracker {
                 let label = host ?? name
                 if filter.isBlocked(bundleID: bundleID, appName: name, windowTitle: "", url: url) { return }
                 await Store.shared.addAppTime(app: label, seconds: elapsed)
+                await MainActor.run { self.accrueSegment(label: label, now: now) }
             }
             return
         }
 
         if filter.isBlocked(bundleID: bundleID, appName: name, windowTitle: "", url: nil) { return }
         Task { await Store.shared.addAppTime(app: name, seconds: elapsed) }
+        accrueSegment(label: name, now: now)
+    }
+
+    // MARK: attention timeline (focus segments)
+
+    private var openSegID: Int64?
+    private var openSegLabel: String?
+    private var lastAccrual: Date?
+
+    /// Extend the open focus segment while the same app/site stays in front;
+    /// a change of label (or a gap — idle, lock, sleep) closes it and opens a
+    /// fresh one. This is the raw timeline FocusService analyses.
+    private func accrueSegment(label: String, now: Date) {
+        // Live focus-session watchdog gets every resolved label.
+        FocusSessionCenter.shared.observe(label: label, now: now)
+        let gap = lastAccrual.map { now.timeIntervalSince($0) } ?? .infinity
+        let stale = gap > 90 // missed several ticks → treat as a break, not one long segment
+        lastAccrual = now
+        if label == openSegLabel, !stale {
+            // openSegID may still be nil while the INSERT is in flight — skip
+            // the extend rather than opening a duplicate segment.
+            if let id = openSegID { Task { await Store.shared.extendFocusSegment(id: id, to: now) } }
+            return
+        }
+        openSegLabel = label
+        openSegID = nil
+        Task {
+            let id = await Store.shared.openFocusSegment(app: label, at: now)
+            await MainActor.run { if self.openSegLabel == label { self.openSegID = id } }
+        }
+    }
+
+    private func closeSegment() {
+        openSegID = nil
+        openSegLabel = nil
+        lastAccrual = nil
     }
 
     /// "https://www.youtube.com/watch?..." → "youtube.com" (nil if not web).

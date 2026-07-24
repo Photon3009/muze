@@ -112,6 +112,18 @@ actor Store {
                 t.primaryKey(["day", "app"])
             }
         }
+        migrator.registerMigration("v5-focus-segments") { db in
+            // Timeline of contiguous foreground segments (app or site label) —
+            // the raw material for distraction analysis. app_time keeps the
+            // daily totals; this keeps the ORDER and timing of switches.
+            try db.create(table: "focus_segments") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("day", .text).notNull().indexed()
+                t.column("app", .text).notNull()
+                t.column("startedAt", .datetime).notNull()
+                t.column("endedAt", .datetime).notNull()
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -454,6 +466,72 @@ actor Store {
         return (try? dbQueue.read { db in
             try Row.fetchAll(db, sql: "SELECT app, seconds FROM app_time WHERE day = ? ORDER BY seconds DESC", arguments: [day])
                 .map { AppSpan(app: $0["app"] ?? "?", seconds: $0["seconds"] ?? 0) }
+        }) ?? []
+    }
+
+    // MARK: focus segments (attention timeline)
+
+    /// Open a new foreground segment; returns its row id so the tracker can
+    /// keep extending it while the same app/site stays in front.
+    func openFocusSegment(app: String, at date: Date) -> Int64? {
+        let day = Store.todayKey()
+        return try? dbQueue.write { db -> Int64 in
+            try db.execute(
+                sql: "INSERT INTO focus_segments (day, app, startedAt, endedAt) VALUES (?, ?, ?, ?)",
+                arguments: [day, app, date, date]
+            )
+            return db.lastInsertedRowID
+        }
+    }
+
+    func extendFocusSegment(id: Int64, to date: Date) {
+        try? dbQueue.write { db in
+            try db.execute(sql: "UPDATE focus_segments SET endedAt = ? WHERE id = ?", arguments: [date, id])
+        }
+    }
+
+    func todayFocusSegments() -> [FocusSegment] {
+        let day = Store.todayKey()
+        return (try? dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT app, startedAt, endedAt FROM focus_segments WHERE day = ? ORDER BY startedAt ASC",
+                arguments: [day]
+            ).compactMap { row -> FocusSegment? in
+                guard let app: String = row["app"],
+                      let start: Date = row["startedAt"],
+                      let end: Date = row["endedAt"] else { return nil }
+                return FocusSegment(app: app, startedAt: start, endedAt: end)
+            }
+        }) ?? []
+    }
+
+    /// Segments for the last N days (today included), oldest first — the
+    /// material for cross-day habit detection.
+    func focusSegments(daysBack: Int) -> [FocusSegment] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -daysBack, to: Calendar.current.startOfDay(for: Date()))!
+        return (try? dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT app, startedAt, endedAt FROM focus_segments WHERE startedAt >= ? ORDER BY startedAt ASC",
+                arguments: [cutoff]
+            ).compactMap { row -> FocusSegment? in
+                guard let app: String = row["app"],
+                      let start: Date = row["startedAt"],
+                      let end: Date = row["endedAt"] else { return nil }
+                return FocusSegment(app: app, startedAt: start, endedAt: end)
+            }
+        }) ?? []
+    }
+
+    /// Captured frames overlapping a time window — used to name a focus
+    /// session (window titles) and estimate its reading load (OCR text).
+    func frames(from: Date, to: Date) -> [FrameRecord] {
+        (try? dbQueue.read { db in
+            try FrameRecord
+                .filter(Column("capturedAt") >= from && Column("capturedAt") <= to)
+                .order(Column("capturedAt").asc)
+                .fetchAll(db)
         }) ?? []
     }
 
